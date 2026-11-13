@@ -1,0 +1,57 @@
+name: Decode incoming media
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode base64 media and commit binaries
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          shopt -s globstar nullglob
+          files=(incoming/**/*.b64)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No .b64 files to decode"
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            rel="${f#incoming/}"
+            out="${rel%.b64}"
+            mkdir -p "$(dirname "$out")"
+            base64 -d "$f" > "$out"
+            sha_file="${f%.b64}.sha256"
+            if [ -f "$sha_file" ]; then
+              expected="$(tr -d ' \n\r' < "$sha_file")"
+              actual="$(sha256sum "$out" | awk '{print $1}')"
+              if [ "$expected" != "$actual" ]; then
+                echo "SHA256 mismatch for $out"
+                echo "expected $expected"
+                echo "actual   $actual"
+                exit 1
+              fi
+              echo "decoded $out ($actual)"
+            else
+              echo "decoded $out (no sha256 sidecar)"
+            fi
+            git add "$out"
+            git rm -f "$f"
+            if [ -f "$sha_file" ]; then
+              git rm -f "$sha_file"
+            fi
+          done
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Decode incoming media to raw JPEG files"
+            git push
+          fi
